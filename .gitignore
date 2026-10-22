@@ -1,0 +1,10 @@
+# 依赖与产物
+node_modules/
+*.tgz
+*.log
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

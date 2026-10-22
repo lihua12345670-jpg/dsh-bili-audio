@@ -1,0 +1,12 @@
+# dsh-bili-audio —— DSH bundle patch
+#
+# 在 profile 的配置树里插入本插件的一行。DSH 启动时会按 bundle 层栈叠加各插件的
+# patch，本文件就是「挂载声明」。
+#
+# 安装方式（profile 名按实际替换；桌面版通常是 desktop）：
+#   dsh plugin --profile desktop add link:E:\工作区\dsh-bili-audio
+# 或安装打包后的 .tgz / npm 包：
+#   dsh plugin --profile desktop add dsh-bili-audio
+- insert:
+    - id: bili-audio
+      name: 'dsh-bili-audio'
