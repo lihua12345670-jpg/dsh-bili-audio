@@ -281,6 +281,278 @@ test('非 B 站链接：400 host_not_allowed，且不外呼', async () => {
   assert.equal(called, 0)
 })
 
+/* ------------------------------------------------------------------ *
+ * 番剧 ep / ss
+ * ------------------------------------------------------------------ */
+
+const SEASON_OK = {
+  code: 0,
+  result: {
+    title: '测试番剧',
+    season_id: 33622,
+    episodes: [
+      {
+        id: 1001,
+        ep_id: 1001,
+        bvid: 'BV1test00001',
+        cid: 501,
+        title: '1',
+        long_title: '启程',
+        duration: 1440000,
+      },
+      {
+        id: 1002,
+        ep_id: 1002,
+        bvid: 'BV1test00002',
+        cid: 502,
+        title: '2',
+        long_title: '远行',
+        duration: 1500000,
+      },
+    ],
+    section: [
+      {
+        title: '相关推荐',
+        type: 2,
+        episodes: [
+          {
+            id: 2001,
+            ep_id: 2001,
+            bvid: 'BV1extra0001',
+            cid: 801,
+            title: '主题曲',
+            long_title: '',
+            duration: 172000,
+          },
+        ],
+      },
+    ],
+  },
+}
+
+const PGC_PLAY_OK = {
+  code: 0,
+  result: {
+    dash: {
+      audio: [
+        {
+          base_url: 'https://a.bilivideo.com/pgc-low.m4s',
+          backup_url: ['https://b.bilivideo.com/pgc-low.m4s'],
+          bandwidth: 64000,
+          mime_type: 'audio/mp4',
+          codecs: 'mp4a.40.2',
+        },
+        {
+          baseUrl: 'https://a.bilivideo.com/pgc-high.m4s',
+          backupUrl: ['https://evil.example/nope.m4s', 'https://c.akamaized.net/pgc-high.m4s'],
+          bandwidth: 192000,
+          mimeType: 'audio/mp4',
+          codecs: 'mp4a.40.2',
+        },
+      ],
+    },
+  },
+}
+
+/** 记录每次外呼的 URL 与请求头，按 pgc 路径分流。 */
+function pgcFetch({ season = SEASON_OK, play = PGC_PLAY_OK, media, calls = [] } = {}) {
+  return async (url, init) => {
+    calls.push({ url, init })
+    if (String(url).startsWith('https://api.bilibili.com/pgc/view/web/media')) {
+      return jsonResult(media ?? { code: 0, result: { season_id: 33622, title: '测试番剧' } })
+    }
+    if (String(url).startsWith('https://api.bilibili.com/pgc/view/web/season')) return jsonResult(season)
+    if (String(url).includes('/pgc/player/web/playurl')) return jsonResult(play)
+    throw new Error('单测没有预期的请求：' + url)
+  }
+}
+
+test('ep 链接：点名那一集，时长从毫秒折成秒，snake_case 音频地址也能用', async () => {
+  const calls = []
+  const api = createApi({ fetch: pgcFetch({ calls }) })
+  const { res, state, json } = mockRes()
+  await api.resolve(
+    getRequest(API + '/resolve', { url: 'https://www.bilibili.com/bangumi/play/ep1002' }),
+    res,
+  )
+  assert.equal(state.status, 200)
+  const body = json()
+  assert.equal(body.ok, true)
+  assert.equal(body.title, '测试番剧 EP2 远行')
+  assert.equal(body.bvid, 'BV1test00002')
+  assert.equal(body.cid, '502')
+  assert.equal(body.duration, 1500)
+  assert.equal(body.page, 2)
+  assert.equal(body.pages, 2)
+  assert.equal(body.epId, '1002')
+  assert.equal(body.seasonId, '33622')
+  assert.equal(body.audioUrl, 'https://a.bilivideo.com/pgc-high.m4s')
+  assert.deepEqual(body.backups, ['https://c.akamaized.net/pgc-high.m4s'])
+  assert.equal(calls.length, 2)
+  assert.match(calls[0].url, /[?&]ep_id=1002(&|$)/)
+  assert.match(calls[1].url, /\/pgc\/player\/web\/playurl\?/)
+  assert.match(calls[1].url, /[?&]cid=502(&|$)/)
+  assert.match(calls[1].url, /[?&]fnval=16(&|$)/)
+  assert.equal(calls[1].init.headers.Referer, 'https://www.bilibili.com/bangumi/play/ep1002')
+  assert.equal(calls[1].init.headers.Cookie, undefined)
+  assert.equal(calls[0].init.headers.Cookie, undefined)
+})
+
+test('ss 链接：播放第一集正片，不拿相关推荐', async () => {
+  const calls = []
+  const api = createApi({ fetch: pgcFetch({ calls }) })
+  const { res, state, json } = mockRes()
+  await api.resolve(
+    getRequest(API + '/resolve', { url: 'https://www.bilibili.com/bangumi/play/ss33622' }),
+    res,
+  )
+  assert.equal(state.status, 200)
+  const body = json()
+  assert.equal(body.epId, '1001')
+  assert.equal(body.cid, '501')
+  assert.equal(body.title, '测试番剧 EP1 启程')
+  assert.equal(body.duration, 1440)
+  assert.match(calls[0].url, /[?&]season_id=33622(&|$)/)
+  assert.match(calls[1].url, /[?&]cid=501(&|$)/)
+  assert.equal(calls[1].url.includes('cid=801'), false)
+})
+
+test('b23.tv/ep 不跟随短链，直接按 ep 解析', async () => {
+  const calls = []
+  const api = createApi({ fetch: pgcFetch({ calls }) })
+  const { res, state, json } = mockRes()
+  await api.resolve(getRequest(API + '/resolve', { url: 'https://b23.tv/ep1001' }), res)
+  assert.equal(state.status, 200)
+  assert.equal(json().epId, '1001')
+  assert.equal(calls.some((call) => String(call.url).includes('b23.tv')), false)
+})
+
+test('md 媒体页：先换成 season_id，再播第一集', async () => {
+  const calls = []
+  const api = createApi({ fetch: pgcFetch({ calls }) })
+  const { res, state, json } = mockRes()
+  await api.resolve(
+    getRequest(API + '/resolve', { url: 'https://www.bilibili.com/bangumi/media/md28229051' }),
+    res,
+  )
+  assert.equal(state.status, 200)
+  assert.equal(json().epId, '1001')
+  assert.equal(calls.length, 3)
+  assert.match(calls[0].url, /\/pgc\/view\/web\/media\?media_id=28229051$/)
+  assert.match(calls[1].url, /[?&]season_id=33622(&|$)/)
+})
+
+test('只出现在 section 里的 ep 仍能点名播放', async () => {
+  const calls = []
+  const api = createApi({ fetch: pgcFetch({ calls }) })
+  const { res, state, json } = mockRes()
+  await api.resolve(getRequest(API + '/resolve', { url: 'ep2001' }), res)
+  assert.equal(state.status, 200)
+  assert.equal(json().cid, '801')
+  assert.equal(json().title, '测试番剧 EP主题曲')
+})
+
+test('指定的 ep 不在这一季：404 episode_not_found，且不请求播放地址', async () => {
+  const calls = []
+  const api = createApi({ fetch: pgcFetch({ calls }) })
+  const { res, state, json } = mockRes()
+  await api.resolve(getRequest(API + '/resolve', { url: 'https://www.bilibili.com/bangumi/play/ep404' }), res)
+  assert.equal(state.status, 404)
+  assert.equal(json().error.code, 'episode_not_found')
+  assert.equal(calls.some((call) => String(call.url).includes('playurl')), false)
+})
+
+test('正片为空：404 no_episode', async () => {
+  const season = { code: 0, result: { title: '空季', season_id: 1, episodes: [], section: [] } }
+  const calls = []
+  const api = createApi({ fetch: pgcFetch({ season, calls }) })
+  const { res, state, json } = mockRes()
+  await api.resolve(getRequest(API + '/resolve', { url: 'ss1' }), res)
+  assert.equal(state.status, 404)
+  assert.equal(json().error.code, 'no_episode')
+  assert.equal(calls.length, 1)
+})
+
+test('番剧不存在：-404 / -400 → bangumi_not_found', async () => {
+  for (const code of [-404, -400]) {
+    const api = createApi({ fetch: pgcFetch({ season: { code, message: '啥都木有' } }) })
+    const { res, state, json } = mockRes()
+    await api.resolve(getRequest(API + '/resolve', { url: 'ss33622' }), res)
+    assert.equal(state.status, 404)
+    assert.equal(json().error.code, 'bangumi_not_found')
+  }
+})
+
+test('地区限制：playurl -10403 → 422 bangumi_restricted', async () => {
+  const api = createApi({
+    fetch: pgcFetch({ play: { code: -10403, message: '抱歉您所在地区不可观看！' } }),
+  })
+  const { res, state, json } = mockRes()
+  await api.resolve(getRequest(API + '/resolve', { url: 'ep1001' }), res)
+  assert.equal(state.status, 422)
+  assert.equal(json().error.code, 'bangumi_restricted')
+  assert.match(json().error.message, /地区/)
+})
+
+test('番剧接口成功但没有音频流：422 no_audio_stream', async () => {
+  const api = createApi({ fetch: pgcFetch({ play: { code: 0, result: { dash: { audio: [] } } } }) })
+  const { res, state, json } = mockRes()
+  await api.resolve(getRequest(API + '/resolve', { url: 'ep1001' }), res)
+  assert.equal(state.status, 422)
+  assert.equal(json().error.code, 'no_audio_stream')
+})
+
+test('课堂链接：400 unsupported_link，且不外呼', async () => {
+  let called = 0
+  const api = createApi({
+    fetch: async () => {
+      called += 1
+      return jsonResult(SEASON_OK)
+    },
+  })
+  const { res, state, json } = mockRes()
+  await api.resolve(
+    getRequest(API + '/resolve', { url: 'https://www.bilibili.com/cheese/play/ep123' }),
+    res,
+  )
+  assert.equal(state.status, 400)
+  assert.equal(json().error.code, 'unsupported_link')
+  assert.match(json().error.message, /课堂/)
+  assert.equal(called, 0)
+})
+
+test('短链跳到番剧页之后按 ep 解析', async () => {
+  const calls = []
+  const fetchFake = async (url, init) => {
+    calls.push(url)
+    if (url === 'https://b23.tv/AbCdEfG') {
+      return {
+        ok: true,
+        status: 200,
+        url: 'https://www.bilibili.com/bangumi/play/ep1001',
+        headers: fakeHeaders({}),
+        body: { async cancel() {} },
+      }
+    }
+    return pgcFetch({ calls: [] })(url, init)
+  }
+  const api = createApi({ fetch: fetchFake })
+  const { res, state, json } = mockRes()
+  await api.resolve(getRequest(API + '/resolve', { url: 'https://b23.tv/AbCdEfG' }), res)
+  assert.equal(state.status, 200)
+  assert.equal(json().epId, '1001')
+  assert.equal(calls[0], 'https://b23.tv/AbCdEfG')
+})
+
+test('pgc 时长：毫秒折秒，非正数是 0', () => {
+  const { pgcDurationSeconds, bangumiTitle } = __internals
+  assert.equal(pgcDurationSeconds(2668000), 2668)
+  assert.equal(pgcDurationSeconds(1440000), 1440)
+  assert.equal(pgcDurationSeconds(0), 0)
+  assert.equal(pgcDurationSeconds(-5), 0)
+  assert.equal(bangumiTitle('西游记', { title: '1', long_title: '猴王初问世' }), '西游记 EP1 猴王初问世')
+})
+
 test('POST 方法：405', async () => {
   const api = createApi({ fetch: biliFetch() })
   const { res, state } = mockRes()

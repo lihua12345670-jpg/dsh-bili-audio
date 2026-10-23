@@ -17,7 +17,7 @@ const read = (name) => readFile(new URL('../' + name, import.meta.url), 'utf8')
 
 test('package.json 基本字段', () => {
   assert.equal(pkg.name, 'dsh-bili-audio')
-  assert.equal(pkg.version, '0.1.0')
+  assert.equal(pkg.version, '0.2.0')
   assert.equal(pkg.type, 'module')
   assert.equal(pkg.main, 'lib/index.js')
   assert.equal(pkg.license, 'MIT')
@@ -68,6 +68,21 @@ test('cordis.patch.yml 插入的行与插件名一致', async () => {
   assert.match(yaml, /insert:/)
   assert.match(yaml, /id:\s*bili-audio/)
   assert.match(yaml, /name:\s*['"]?dsh-bili-audio['"]?/)
+})
+
+test('README 写明 v0.2 的持久化边界和番剧', async () => {
+  const readme = await read('README.md')
+  assert.match(readme, /0\.2/)
+  assert.match(readme, /dsh-bili-audio:prefs/)
+  assert.match(readme, /dsh-bili-audio:library/)
+  assert.match(readme, /ep/)
+  assert.match(readme, /不入库/)
+  const english = await read('README.en.md')
+  assert.match(english, /0\.2/)
+  assert.match(english, /localStorage/)
+  assert.match(english, /ep\/ss/)
+  const changelog = await read('CHANGELOG.md')
+  assert.match(changelog, /## 0\.2\.0/)
 })
 
 test('客户端与宿主使用同一个路由前缀', async () => {

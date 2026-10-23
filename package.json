@@ -1,7 +1,7 @@
 {
     "name":  "dsh-bili-audio",
-    "version":  "0.1.0",
-    "description":  "DSH 插件：在 Web 界面右下角挂一个 B 站音频播放条 —— 粘贴 BV 号/链接即可听 B 站视频的声音，支持队列、进度、倍速，并由宿主反向代理解决 B 站 CDN 的 Referer 403 问题。",
+    "version":  "0.2.0",
+    "description":  "DSH 插件：在 Web 界面右下角挂一个 B 站音频播放条 —— 粘贴 BV/av、视频链接或番剧 ep/ss 即可听声音。队列和最近播放记在本地，宿主反向代理解决 CDN Referer 403。不需要登录。",
     "type":  "module",
     "main":  "lib/index.js",
     "exports":  {
@@ -36,6 +36,7 @@
                      "deepseek-harness",
                      "bilibili",
                      "bili",
+                     "bangumi",
                      "audio",
                      "player",
                      "music"
