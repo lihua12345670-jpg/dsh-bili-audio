@@ -108,6 +108,58 @@ test('带内嵌凭据的 URL 被拒绝（防 SSRF 混淆）', () => {
   expectCode('https://user:pass@www.bilibili.com/video/BV1GJ411x7h7', 'invalid_url')
 })
 
+test('番剧 ep 播放页', () => {
+  const ref = parseVideoRef('https://www.bilibili.com/bangumi/play/ep327107')
+  assert.equal(ref.kind, 'bangumi')
+  assert.equal(ref.epId, '327107')
+  assert.equal(ref.seasonId, undefined)
+})
+
+test('番剧 ss 播放页，?ep_id= 覆盖到具体一集', () => {
+  const season = parseVideoRef('https://www.bilibili.com/bangumi/play/ss33622/')
+  assert.equal(season.kind, 'bangumi')
+  assert.equal(season.seasonId, '33622')
+  assert.equal(season.epId, undefined)
+  const pointed = parseVideoRef('https://m.bilibili.com/bangumi/play/ss33622?ep_id=327108')
+  assert.equal(pointed.seasonId, '33622')
+  assert.equal(pointed.epId, '327108')
+})
+
+test('番剧媒体页 md、旧站 /anime/、hash 里的集数', () => {
+  const media = parseVideoRef('https://www.bilibili.com/bangumi/media/md28229051')
+  assert.equal(media.mediaId, '28229051')
+  assert.equal(media.epId, undefined)
+  const anime = parseVideoRef('https://bangumi.bilibili.com/anime/28229051/play#327107')
+  assert.equal(anime.mediaId, '28229051')
+  assert.equal(anime.epId, '327107')
+})
+
+test('b23.tv/ep 与 b23.tv/ss 直接当成番剧编号，其它短链仍要跟随跳转', () => {
+  const episode = parseVideoRef('https://b23.tv/ep327107')
+  assert.equal(episode.kind, 'bangumi')
+  assert.equal(episode.epId, '327107')
+  assert.equal(episode.short, undefined)
+  const season = parseVideoRef('https://b23.tv/ss33622')
+  assert.equal(season.seasonId, '33622')
+  const opaque = parseVideoRef('https://b23.tv/AbCdEfG')
+  assert.equal(opaque.short, true)
+})
+
+test('裸 ep / ss 整段匹配；夹在句子里的不误抓', () => {
+  assert.deepEqual(parseVideoRef('ep327107'), { kind: 'bangumi', epId: '327107' })
+  assert.deepEqual(parseVideoRef('SS33622'), { kind: 'bangumi', seasonId: '33622' })
+  expectCode('去看 ep327107 吧', 'no_video_id')
+})
+
+test('直播 / 课堂 / 空间 / 专栏 / 音频区：unsupported_link，而不是「没有 BV」', () => {
+  expectCode('https://live.bilibili.com/123', 'unsupported_link')
+  expectCode('https://www.bilibili.com/cheese/play/ep123', 'unsupported_link')
+  expectCode('https://space.bilibili.com/1', 'unsupported_link')
+  expectCode('https://www.bilibili.com/read/cv123', 'unsupported_link')
+  expectCode('https://www.bilibili.com/audio/au123', 'unsupported_link')
+  expectCode('https://www.bilibili.com/bangumi/index', 'unsupported_link')
+})
+
 test('parsePage：非法分 P 收敛到 1', () => {
   assert.equal(parsePage('2'), 2)
   assert.equal(parsePage('0'), 1)

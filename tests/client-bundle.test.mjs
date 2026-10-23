@@ -111,6 +111,9 @@ test('bundle 里没有 import/export 语句（必须是自注册单文件）', a
  * 至少保证「初始渲染 + 副作用」不会抛异常（错字、空引用、hooks 顺序问题）。
  * ------------------------------------------------------------------ */
 
+/** 假 <audio>.play() 被调用的次数，用来确认「恢复队列」不会自动开播。 */
+let audioPlayCount = 0
+
 /** 假 DOM 元素：只实现客户端代码真正会碰的那几个 DOM API。 */
 function fakeElement(type, props, children) {
   const node = {
@@ -127,6 +130,7 @@ function fakeElement(type, props, children) {
     load() {},
     pause() {},
     play() {
+      audioPlayCount += 1
       return Promise.resolve()
     },
   }
@@ -502,6 +506,115 @@ test('队列交互：解析并播放 → 只入队 → 切歌 → 清空', async
     runtime.flush()
     assert.equal(findByClass(runtime.tree, 'ba-item').length, 0, '清空后队列应该为空')
     assert.match(collectText(runtime.tree).join(' '), /队列是空的/)
+  } finally {
+    globalThis.fetch = previousFetch
+  }
+})
+
+test('刷新后恢复队列、错误文案和进度，且不自动播放、不把音频地址写回本地', async () => {
+  const library = {
+    v: 1,
+    currentId: 'keep-me',
+    position: 12.4,
+    items: [
+      {
+        id: 'keep-me',
+        link: 'BV1GJ411x7h7',
+        title: '已保存的歌',
+        status: 'ready',
+        bvid: 'BV1GJ411x7h7',
+        cid: '137649199',
+        duration: 90,
+        audioUrl: 'https://a.bilivideo.com/expired.m4s',
+      },
+      {
+        id: 'bad',
+        link: 'ep404',
+        title: '失败的一集',
+        status: 'error',
+        error: '这一季里没有找到对应的集',
+      },
+    ],
+    history: [{ link: 'ss33622', title: '最近的番剧', playedAt: 10 }],
+  }
+  const memory = new Map([['dsh-bili-audio:library', JSON.stringify(library)]])
+  installFakeDom('zh-CN', null)
+  globalThis.localStorage = {
+    getItem(key) {
+      return memory.has(key) ? memory.get(key) : null
+    },
+    setItem(key, value) {
+      memory.set(key, String(value))
+    },
+  }
+  globalThis.window.localStorage = globalThis.localStorage
+
+  const calls = []
+  const previousFetch = globalThis.fetch
+  globalThis.fetch = async (requestUrl) => {
+    calls.push(String(requestUrl))
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          ok: true,
+          title: '已保存的歌',
+          bvid: 'BV1GJ411x7h7',
+          cid: '137649199',
+          duration: 90,
+          audioUrl: 'https://a.bilivideo.com/fresh.m4s',
+          backups: [],
+        }
+      },
+    }
+  }
+
+  try {
+    const runtime = createHookRuntime()
+    const clientModule = definition.factory(() => runtime.react)
+    let component
+    clientModule.apply({
+      slots: {
+        inject(name, factory) {
+          return factory()
+        },
+        register(entry, instance) {
+          component = instance
+          return () => {}
+        },
+      },
+    })
+    runtime.render(component)
+    const before = collectText(runtime.tree).join(' ')
+    assert.match(before, /已保存的歌/)
+    assert.match(before, /这一季里没有找到对应的集/)
+    assert.match(before, /已保存/)
+    assert.match(before, /0:12/)
+    assert.equal(findByClass(runtime.tree, 'ba-item-meta-error').length, 1)
+    assert.equal(runtime.tree.children[0].getAttribute('src'), null)
+
+    const playsBefore = audioPlayCount
+    runtime.runEffects()
+    await settle(runtime)
+    assert.equal(audioPlayCount, playsBefore, '恢复队列不应该自动播放')
+    assert.equal(
+      calls.some((url) => url.includes('BV1GJ411x7h7')),
+      true,
+      '当前条目要重新解析',
+    )
+    assert.equal(
+      calls.some((url) => url.includes('ep404')),
+      false,
+      '失败条目保持原错误，不自动重试',
+    )
+    assert.match(String(runtime.tree.children[0].getAttribute('src') || ''), /\/bili-audio\/api\/stream\?u=/)
+
+    const stored = memory.get('dsh-bili-audio:library')
+    assert.equal(typeof stored, 'string')
+    assert.equal(stored.includes('audioUrl'), false)
+    assert.equal(stored.includes('bilivideo'), false)
+    assert.match(stored, /已保存的歌/)
   } finally {
     globalThis.fetch = previousFetch
   }
